@@ -1095,7 +1095,7 @@ impl App {
             SystemCommand::SetSelection(set) => {
 
 
-                let current_store_id = self.store_hub.unwrap().active_store_id();
+                let current_store_id = self.store_hub.as_ref().unwrap().active_store_id();
 
                 if let Some(item) = set.selection.single_item() {
                     // If the selected item has its own page, switch to it.

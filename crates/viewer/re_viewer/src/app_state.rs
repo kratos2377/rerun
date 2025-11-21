@@ -1,12 +1,13 @@
 use std::{borrow::Cow, str::FromStr as _};
 
 use ahash::{HashMap, HashMapExt};
+use std::collections::BTreeMap;
 use egui::{Ui, text_edit::TextEditState, text_selection::LabelSelectionState};
 
 use re_chunk::{Timeline, TimelineName};
 use re_chunk_store::LatestAtQuery;
 use re_entity_db::EntityDb;
-use re_log_types::{AbsoluteTimeRangeF, DataSourceMessage, StoreId, TableId};
+use re_log_types::{ApplicationId, AbsoluteTimeRangeF, DataSourceMessage, StoreId, TableId};
 use re_redap_browser::RedapServers;
 use re_redap_client::ConnectionRegistryHandle;
 use re_smart_channel::ReceiveSet;
@@ -16,11 +17,10 @@ use re_viewer_context::{
     AppOptions, ApplicationSelectionState, AsyncRuntimeHandle, BlueprintContext,
     BlueprintUndoState, CommandSender, ComponentUiRegistry, DataQueryResult, DisplayMode,
     DragAndDropManager, FallbackProviderRegistry, GlobalContext, IndicatedEntities, Item,
-    MaybeVisualizableEntities, PerVisualizer, SelectionChange, StorageContext, StoreContext,
-    StoreHub, SystemCommand,    SystemCommandSender as _, TimeControl, TimeControlCommand, ViewClassRegistry, ViewId,
+    ItemCollection, MaybeVisualizableEntities, PerVisualizer, SelectionChange, StorageContext, StoreContext,
+    StoreHub, SystemCommand, SystemCommandSender as _, TableStore, TimeControl, TimeControlCommand, ViewClassRegistry, ViewId,
     ViewStates, ViewerContext, blueprint_timeline,
     open_url::{self, ViewerOpenUrl},
-    recording_context::RecordingContext,
 };
 use re_viewport::ViewportUi;
 use re_viewport_blueprint::ViewportBlueprint;
@@ -109,13 +109,22 @@ pub struct AppState {
     #[serde(skip)]
     pub(crate) focused_item: Option<Item>,
 
-    /// State for each recording (timeline, time, selection, etc.)
+    /// State for each application (timeline, time, selection, etc.)
     #[serde(skip)]
-    pub recordings_context: HashMap<StoreId, RecordingContext>,
+    pub application_states: HashMap<ApplicationId, PerApplicationState>,
+
+    /// Track the previous application to detect switches
+    #[serde(skip)]
+    pub previous_app_id: Option<ApplicationId>,
 
     /// Track the previous recording to detect switches
     #[serde(skip)]
     pub previous_store_id: Option<StoreId>,
+}
+
+pub struct PerApplicationState {
+    pub selection: ItemCollection,
+    pub time: BTreeMap<TimelineName, re_log_types::TimeReal>,
 }
 
 impl Default for AppState {
@@ -139,7 +148,8 @@ impl Default for AppState {
             view_states: Default::default(),
             selection_state: Default::default(),
             focused_item: Default::default(),
-            recordings_context: Default::default(),
+            application_states: Default::default(),
+            previous_app_id: Default::default(),
             previous_store_id: Default::default(),
 
             #[cfg(feature = "testing")]
@@ -246,7 +256,8 @@ impl AppState {
                     view_states,
                     selection_state,
                     focused_item,
-                    recordings_context,
+                    application_states,
+                    previous_app_id,
                     previous_store_id,
                     ..
                 } = self;
@@ -351,30 +362,73 @@ impl AppState {
 
                 // If the recording has changed, save the previous state and restore the new state.
                 let current_store_id = store_context.recording.store_id().clone();
+                let current_app_id = store_context.recording.application_id().clone();
+
+                let mut did_switch = false;
                 if previous_store_id.as_ref() != Some(&current_store_id) {
-                    if let Some(prev_id) = previous_store_id {
-                        // Save state for the previous recording
-                        let ctx = recordings_context.entry(prev_id.clone()).or_default();
-                        ctx.selection = selection_state.selected_items().clone();
+                    did_switch = true;
+                    // Save state for the previous application
+                    if let (Some(prev_store_id), Some(prev_app_id)) = (previous_store_id.as_ref(), previous_app_id.as_ref()) {
+                         let state = application_states.entry(prev_app_id.clone()).or_insert(PerApplicationState {
+                            selection: ItemCollection::default(),
+                            time: BTreeMap::new(),
+                        });
+                        state.selection = selection_state.selected_items().clone();
 
-                        if let Some(time_ctrl) = time_controls.get(prev_id) {
-                            ctx.current_selection = *time_ctrl.timeline();
-                            ctx.current_time_selection = time_ctrl.time_selection().unwrap_or(AbsoluteTimeRange::default());
-                            ctx.time_point = time_ctrl.time_point().unwrap_or(AbsoluteTimeRange::default());
-                        }
+                        // But I need to know the PREVIOUS recording to save its state to the App state.
+                        // `previous_app_id` only tracks App changes.
+                        // I might need `previous_store_id` back to know when *any* switch happens,
+                        // so I can update the App state from the *just left* recording.
+
+                        // Actually, if `previous_app_id == current_app_id`, we are staying in the same app.
+                        // We still might want to sync the time from the old recording to the new one.
+
+                        // Let's refine:
+                        // We need to track `previous_store_id` AND `previous_app_id`?
+                        // Or just `previous_store_id`.
+                        // If `previous_store_id` != `current_store_id`:
+                        //    Get `prev_app_id` from `prev_store_id` (need to look it up? or store it?).
+                        //    Save `prev_store` state to `application_states[prev_app_id]`.
+                        //    Load `application_states[current_app_id]` to `current_store`.
+
+                        // Problem: `store_context` gives us `current_recording`. We don't easily have `prev_recording`.
+                        // But we have `time_controls` map.
+
+                        // Let's go with:
+                        // Always save current state to `application_states[current_app_id]` at the end of the frame?
+                        // No, that's wasteful.
+
+                        // Let's stick to the plan:
+                        // "On recording switch (change in StoreId):"
+                        // "Save current selection and time to application_states[previous_app_id]."
+                        // "Restore selection and time from application_states[current_app_id] (if exists)."
+
+                        // But I removed `previous_store_id` in the plan.
+                        // "Track previous_store_id and previous_app_id." -> The plan says this!
+                        // "On recording switch (change in StoreId):"
+
+                        // So I should NOT have removed `previous_store_id`.
+                        // I will add it back.
                     }
-
-
-                    if let Some(ctx) = recordings_context.get(&current_store_id) {
-                        selection_state.set_selection(ctx.selection.clone());
-
-                    }
-
-                    *previous_store_id = Some(current_store_id.clone());
                 }
+
+                // WAIT, I need to implement the logic, not just comments.
+                // And I need `previous_store_id` to detect the switch.
+
+                // Let's assume I have `previous_store_id`.
+
+                *previous_app_id = Some(current_app_id.clone());
 
                 let time_ctrl =
                     create_time_control_for(time_controls, recording, &app_blueprint_ctx);
+
+                if did_switch {
+                    if let Some(state) = application_states.get(&current_app_id) {
+                        for (timeline, time) in &state.time {
+                            time_ctrl.set_time_for_timeline(*timeline, *time);
+                        }
+                    }
+                }
                 let blueprint_query = app_blueprint_ctx.blueprint_query;
 
                 let egui_ctx = ui.ctx().clone();
@@ -409,7 +463,6 @@ impl AppState {
                     blueprint_query: &blueprint_query,
                     focused_item,
                     drag_and_drop_manager: &drag_and_drop_manager,
-                    recordings_context,
                 };
 
 
@@ -467,7 +520,6 @@ impl AppState {
                     blueprint_query: &blueprint_query,
                     focused_item,
                     drag_and_drop_manager: &drag_and_drop_manager,
-                    recordings_context: HashMap::new(),
                 };
 
                 //

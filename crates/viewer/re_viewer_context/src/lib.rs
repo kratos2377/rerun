@@ -41,7 +41,7 @@ mod utils;
 mod view;
 mod viewer_context;
 
-mod recording_context;
+
 
 // TODO(andreas): Move to its own crate?
 pub mod gpu_bridge;

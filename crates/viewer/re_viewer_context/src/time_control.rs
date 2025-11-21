@@ -434,6 +434,20 @@ impl TimeControl {
         this
     }
 
+    pub fn time_per_timeline(&self) -> BTreeMap<TimelineName, TimeReal> {
+        self.states
+            .iter()
+            .map(|(timeline, state)| (*timeline, state.time))
+            .collect()
+    }
+
+    pub fn set_time_for_timeline(&mut self, timeline: TimelineName, time: TimeReal) {
+        self.states
+            .entry(timeline)
+            .or_insert_with(|| TimeState::new(time))
+            .time = time;
+    }
+
     /// Read from the time panel blueprint and update the state from that.
     ///
     /// If `times_per_timeline` is some this will also make sure we are on

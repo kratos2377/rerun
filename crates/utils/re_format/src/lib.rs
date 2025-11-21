@@ -112,6 +112,15 @@ where
     add_thousands_separators(&number.to_string())
 }
 
+/// Returns "s" if the count is not 1, otherwise "".
+pub fn format_plural_s(count: impl num_traits::Num) -> &'static str {
+    if count.is_one() {
+        ""
+    } else {
+        "s"
+    }
+}
+
 /// Add thousands separators to a number, every three steps,
 /// counting from the last character.
 fn add_thousands_separators(number: &str) -> String {
@@ -803,8 +812,8 @@ fn test_remove_number_formatting() {
     );
 }
 
-/// Returns "s" if `count` is not one, otherwise returns an empty string.
-#[expect(clippy::needless_pass_by_value)]
-pub fn format_plural_s(count: impl num_traits::Num) -> &'static str {
-    if count.is_one() { "" } else { "s" }
-}
+// /// Returns "s" if `count` is not one, otherwise returns an empty string.
+// #[expect(clippy::needless_pass_by_value)]
+// pub fn format_plural_s(count: impl num_traits::Num) -> &'static str {
+//     if count.is_one() { "" } else { "s" }
+// }
