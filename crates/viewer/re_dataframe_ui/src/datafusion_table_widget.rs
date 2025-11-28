@@ -644,9 +644,25 @@ impl DataFusionTableDelegate<'_> {
         }
     }
 
+    fn entry_link_for_row(&self, row: u64, spec: &EntryLinksSpec) -> Option<String> {
+        let (display_record_batch, batch_index) =
+            Self::with_row_batch(self.display_record_batches, row as usize)?;
+        let column_index = self
+            .columns
+            .iter()
+            .position(|col| col.blueprint.display_name.as_ref() == Some(&spec.column_name))?;
+        let column = display_record_batch.columns().get(column_index)?;
+
+        match column {
+            DisplayColumn::RowId { .. } | DisplayColumn::Timeline { .. } => None,
+            DisplayColumn::Component(col) => col.string_value_at(batch_index),
+        }
+    }
+
     pub fn row_context_menu(&self, ui: &Ui, _row_number: u64) {
-        let has_context_menu = self.blueprint.partition_links.is_some();
-        if !has_context_menu {
+        let has_partition_links = self.blueprint.partition_links.is_some();
+        let has_entry_links = self.blueprint.entry_links.is_some();
+        if !has_partition_links && !has_entry_links {
             return;
         }
 
@@ -677,6 +693,37 @@ impl DataFusionTableDelegate<'_> {
                             });
                         } else {
                             error!("Could not get partition link for row {}", row);
+                        }
+                    }
+                };
+
+                if response.clicked_with_open_in_background() {
+                    open(true);
+                } else if response.clicked() {
+                    open(false);
+                }
+            }
+
+            if let Some(entry_links_spec) = &self.blueprint.entry_links {
+                let label = format!(
+                    "Open {} entry{}",
+                    selected_rows.len(),
+                    format_plural_s(selected_rows.len())
+                );
+                let response =
+                    ui.add(icons::RIGHT_PANEL_TOGGLE.as_button_with_label(ui.tokens(), label));
+
+                let open = |new_tab| {
+                    for row in selected_rows.iter().copied().sorted() {
+                        if let Some(entry_link) =
+                            self.entry_link_for_row(row, entry_links_spec)
+                        {
+                            ui.ctx().open_url(OpenUrl {
+                                url: entry_link,
+                                new_tab,
+                            });
+                        } else {
+                            error!("Could not get entry link for row {}", row);
                         }
                     }
                 };
