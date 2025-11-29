@@ -3,7 +3,6 @@ use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, datatypes::Schema as ArrowSchema};
 use re_arrow_util::ArrowArrayDowncastRef as _;
 use re_log_types::EntryId;
-use re_protos::cloud::v1alpha1::WriteTableRequest;
 use re_protos::cloud::v1alpha1::ext::{CreateTableEntryRequest, ProviderDetails, TableInsertMode};
 use re_protos::{
     TypeConversionError,
@@ -35,7 +34,7 @@ use re_protos::{
 use re_types_core::ChunkIndex;
 use tokio_stream::{Stream, StreamExt as _};
 use tonic::codegen::{Body, StdError};
-use tonic::{IntoStreamingRequest as _, Status};
+use tonic::Status;
 use url::Url;
 
 pub type ResponseStream<T> = std::pin::Pin<Box<dyn Stream<Item = Result<T, tonic::Status>> + Send>>;
@@ -796,21 +795,63 @@ where
         table_id: EntryId,
         insert_mode: TableInsertMode,
     ) -> Result<(), ApiError> {
-        let insert_mode = re_protos::cloud::v1alpha1::TableInsertMode::from(insert_mode).into();
-        let stream = stream
-            .map(move |batch| WriteTableRequest {
-                dataframe_part: Some(batch.into()),
-                insert_mode,
-            })
-            .into_streaming_request()
-            .with_entry_id(table_id)
-            .map_err(|err| ApiError::tonic(err, "/WriteTable failed"))?;
+        let insert_mode_proto =
+            re_protos::cloud::v1alpha1::TableInsertMode::from(insert_mode).into();
 
-        self.inner()
-            .write_table(stream)
-            .await
-            .map(|_| ())
-            .map_err(|err| ApiError::tonic(err, "/WriteTable failed"))
+        #[cfg(target_arch = "wasm32")]
+        {
+            let batches: Vec<_> = stream.collect::<Vec<_>>().await;
+            if batches.is_empty() {
+                return Ok(());
+            }
+
+            let schema = batches[0].schema();
+            let combined_batch = arrow::compute::concat_batches(&schema, &batches).map_err(|err| {
+                ApiError::tonic(
+                    Status::internal(err.to_string()),
+                    "failed to concatenate batches for non-streaming write",
+                )
+            })?;
+
+            let request = re_protos::cloud::v1alpha1::WriteTableRequest {
+                dataframe_part: Some(combined_batch.into()),
+                insert_mode: insert_mode_proto,
+            };
+
+            self.inner()
+                .write_table_non_streaming(
+                    tonic::Request::new(request)
+                        .with_entry_id(table_id)
+                        .map_err(|err| {
+                            ApiError::tonic(err, "failed building /WriteTableNonStreaming request")
+                        })?,
+                )
+                .await
+                .map_err(|err| ApiError::tonic(err, "/WriteTableNonStreaming failed"))?;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let stream = stream.map(move |batch| {
+                re_protos::cloud::v1alpha1::WriteTableRequest {
+                    dataframe_part: Some(batch.into()),
+                    insert_mode: insert_mode_proto,
+                }
+            });
+
+            self.inner()
+                .write_table(
+                    tonic::Request::new(stream)
+                        .with_entry_id(table_id)
+                        .map_err(|err| {
+                            ApiError::tonic(err, "failed building /WriteTable request")
+                        })?,
+                )
+                .await
+                .map_err(|err| ApiError::tonic(err, "/WriteTable failed"))?;
+        }
+
+        Ok(())
     }
 
     pub async fn create_table_entry(

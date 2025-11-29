@@ -77,5 +77,6 @@ define_redap_tests! {
     register_partition::register_partition_bumps_timestamp,
     update_entry::update_entry_tests,
     update_entry::update_entry_bumps_timestamp,
-    write_table::write_table
+    write_table::write_table,
+    write_table::write_table_non_streaming
 }

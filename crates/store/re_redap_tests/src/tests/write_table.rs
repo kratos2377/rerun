@@ -165,3 +165,66 @@ pub async fn write_table(service: impl RerunCloudService) {
     let combined = concat_record_batches(&returned_batches);
     insta::assert_snapshot!("replace_rows", combined.format_snapshot(false));
 }
+
+pub async fn write_table_non_streaming(service: impl RerunCloudService) {
+    let table_name = "test_table_non_streaming";
+    let path = create_simple_lance_dataset()
+        .await
+        .expect("Unable to create lance dataset");
+
+    service
+        .register_table_with_name(table_name, path.as_path())
+        .await;
+
+    let find_table = FindEntriesRequest {
+        filter: Some(re_protos::cloud::v1alpha1::EntryFilter {
+            name: Some(table_name.to_owned()),
+            ..Default::default()
+        }),
+    };
+
+    let table_entry_resp = service
+        .find_entries(tonic::Request::new(find_table))
+        .await
+        .expect("Failed to find entries")
+        .into_inner()
+        .entries;
+
+    assert_eq!(table_entry_resp.len(), 1);
+
+    let entry: EntryDetails = table_entry_resp[0]
+        .clone()
+        .try_into()
+        .expect("Failed to convert to EntryDetails");
+
+    assert_eq!(entry.name, table_name);
+
+    let original_batches = get_table_batches(&service, &entry).await;
+    assert_ne!(original_batches.len(), 0);
+
+    let original_rows: usize = original_batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_ne!(original_rows, 0);
+
+    // Concatenate all batches into one for non-streaming write
+    let combined_batch = concat_record_batches(&original_batches);
+
+    let request = WriteTableRequest {
+        dataframe_part: Some(combined_batch.into()),
+        insert_mode: TableInsertMode::Append.into(),
+    };
+
+    service
+        .write_table_non_streaming(
+            tonic::Request::new(request)
+                .with_entry_id(entry.id)
+                .expect("Unable to set entry_id on write table"),
+        )
+        .await
+        .expect("Failed to write table (non-streaming) in append mode");
+
+    let returned_batches = get_table_batches(&service, &entry).await;
+    let returned_rows: usize = returned_batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(returned_rows, 2 * original_rows);
+    let combined = concat_record_batches(&returned_batches);
+    insta::assert_snapshot!("append_table_non_streaming", combined.format_snapshot(false));
+}

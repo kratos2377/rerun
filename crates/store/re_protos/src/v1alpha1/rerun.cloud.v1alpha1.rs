@@ -2501,6 +2501,30 @@ pub mod rerun_cloud_service_client {
             ));
             self.inner.client_streaming(req, path, codec).await
         }
+        /// Write record batches to a table (non-streaming).
+        ///
+        /// This endpoint requires the standard dataset headers.
+        ///
+        /// This is a non-streaming variant of `WriteTable` to support `grpc-web` clients.
+        pub async fn write_table_non_streaming(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WriteTableRequest>,
+        ) -> std::result::Result<tonic::Response<super::WriteTableResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/rerun.cloud.v1alpha1.RerunCloudService/WriteTableNonStreaming",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "rerun.cloud.v1alpha1.RerunCloudService",
+                "WriteTableNonStreaming",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
         /// Query the status of submitted tasks
         pub async fn query_tasks(
             &mut self,
@@ -2821,6 +2845,15 @@ pub mod rerun_cloud_service_server {
         async fn write_table(
             &self,
             request: tonic::Request<tonic::Streaming<super::WriteTableRequest>>,
+        ) -> std::result::Result<tonic::Response<super::WriteTableResponse>, tonic::Status>;
+        /// Write record batches to a table (non-streaming).
+        ///
+        /// This endpoint requires the standard dataset headers.
+        ///
+        /// This is a non-streaming variant of `WriteTable` to support `grpc-web` clients.
+        async fn write_table_non_streaming(
+            &self,
+            request: tonic::Request<super::WriteTableRequest>,
         ) -> std::result::Result<tonic::Response<super::WriteTableResponse>, tonic::Status>;
         /// Query the status of submitted tasks
         async fn query_tasks(
@@ -4044,6 +4077,48 @@ pub mod rerun_cloud_service_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/rerun.cloud.v1alpha1.RerunCloudService/WriteTableNonStreaming" => {
+                    #[allow(non_camel_case_types)]
+                    struct WriteTableNonStreamingSvc<T: RerunCloudService>(pub Arc<T>);
+                    impl<T: RerunCloudService> tonic::server::UnaryService<super::WriteTableRequest>
+                        for WriteTableNonStreamingSvc<T>
+                    {
+                        type Response = super::WriteTableResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::WriteTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as RerunCloudService>::write_table_non_streaming(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = WriteTableNonStreamingSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

@@ -169,6 +169,13 @@ service RerunCloudService {
   // A non-streaming shim will need to be added if/when the viewer uses this endpoint.
   rpc WriteTable(stream WriteTableRequest) returns (WriteTableResponse) {}
 
+  // Write record batches to a table (non-streaming).
+  //
+  // This endpoint requires the standard dataset headers.
+  //
+  // This is a non-streaming variant of `WriteTable` to support `grpc-web` clients.
+  rpc WriteTableNonStreaming(WriteTableRequest) returns (WriteTableResponse) {}
+
   // --- Tasks ---
 
   // Query the status of submitted tasks

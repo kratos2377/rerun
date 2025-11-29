@@ -781,6 +781,51 @@ impl RerunCloudService for RerunCloudHandler {
         ))
     }
 
+    async fn write_table_non_streaming(
+        &self,
+        request: tonic::Request<re_protos::cloud::v1alpha1::WriteTableRequest>,
+    ) -> Result<tonic::Response<re_protos::cloud::v1alpha1::WriteTableResponse>, tonic::Status>
+    {
+        // Limit the scope of the lock here to prevent deadlocks
+        // when reading and writing to the same table
+        let entry_id = {
+            let store = self.store.read().await;
+            get_entry_id_from_headers(&store, &request)?
+        };
+
+        let write_msg = request.into_inner();
+
+        let rb = write_msg
+            .dataframe_part
+            .ok_or_else(|| {
+                tonic::Status::invalid_argument("no data frame in WriteTableRequest")
+            })?
+            .try_into()
+            .map_err(|err| {
+                tonic::Status::internal(format!("Could not decode chunk: {err:#}"))
+            })?;
+
+        let mut store = self.store.write().await;
+        let Some(table) = store.table_mut(entry_id) else {
+            return Err(tonic::Status::not_found("table not found"));
+        };
+        let insert_op = match TableInsertMode::try_from(write_msg.insert_mode)
+            .map_err(|err| Status::invalid_argument(err.to_string()))?
+        {
+            TableInsertMode::Append => InsertOp::Append,
+            TableInsertMode::Overwrite => InsertOp::Overwrite,
+            TableInsertMode::Replace => InsertOp::Replace,
+        };
+
+        table.write_table(rb, insert_op).await.map_err(|err| {
+            tonic::Status::internal(format!("error writing to table: {err:#}"))
+        })?;
+
+        Ok(tonic::Response::new(
+            re_protos::cloud::v1alpha1::WriteTableResponse {},
+        ))
+    }
+
     /* Query schemas */
 
     async fn get_partition_table_schema(
